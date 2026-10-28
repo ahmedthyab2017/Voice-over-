@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>استوديو التعليق الصوتي</title>
+<meta name="theme-color" content="#16130f">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Alexandria:wght@500;700&family=IBM+Plex+Sans+Arabic:wght@400;500;600&display=swap">
+<style>
+/* Layout: script editor on top, one card per segment (prompt, record, trim, speed), sticky bottom bar for voice tone + export */
+:root{
+  --bg:#f4f1ea; --surface:#fffdf8; --raised:#efe9dd; --ink:#1c1915; --muted:#6c655a; --line:#e0d8ca;
+  --gold:#9b6b22; --gold-ink:#fff; --gold-soft:#f1e4cc; --rec:#c2382b; --rec-soft:#f8dcd8; --ok:#2d7449; --ok-soft:#ddeee3;
+  --wave:#b9ad98; --wave-on:#9b6b22;
+  --display:"Alexandria","IBM Plex Sans Arabic",Tahoma,sans-serif;
+  --body:"IBM Plex Sans Arabic",Tahoma,"Segoe UI",sans-serif;
+  --prompt:1.4rem;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#16130f; --surface:#1f1b16; --raised:#29241d; --ink:#f1ebe0; --muted:#a59c8e; --line:#373027;
+  --gold:#d8a453; --gold-ink:#1a140b; --gold-soft:#3a2c17; --rec:#f0705f; --rec-soft:#3d1e1a; --ok:#6cc38f; --ok-soft:#1b3125;
+  --wave:#5c5245; --wave-on:#d8a453; color-scheme:dark}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink)}
+body{font-family:var(--body);line-height:1.7;font-size:15px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:calc(18px + env(safe-area-inset-top,0px)) 200px}
+.wrap{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:16px}
+h1{font-family:var(--display);font-weight:700;font-size:1.55rem;margin:0;line-height:1.3;text-wrap:balance}
+h2{font-family:var(--display);font-weight:500;font-size:1.05rem;margin:0}
+.sub{color:var(--muted);margin:4px 0 0;font-size:.92rem}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
+textarea{width:100%;min-height:200px;font:inherit;font-size:1rem;line-height:1.8;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:12px;resize:vertical}
+.hint{font-size:.82rem;color:var(--muted)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.btn{font:inherit;font-weight:600;font-size:.92rem;border-radius:10px;padding:9px 14px;cursor:pointer;border:1px solid var(--line);background:var(--surface);color:var(--ink);display:inline-flex;align-items:center;gap:6px;min-height:42px}
+.btn:focus-visible,input:focus-visible,textarea:focus-visible{outline:3px solid var(--gold);outline-offset:2px}
+.btn.primary{background:var(--gold);border-color:var(--gold);color:var(--gold-ink)}
+.btn.rec{background:var(--rec);border-color:var(--rec);color:#fff}
+.btn.small{min-height:34px;padding:5px 10px;font-size:.84rem}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.seg{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.seg.has{border-color:var(--ok)}
+.seg.live{border-color:var(--rec);box-shadow:0 0 0 3px var(--rec-soft)}
+.seg-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.num{font-family:var(--display);color:var(--gold);font-size:.95rem}
+.badge{font-size:.76rem;padding:2px 10px;border-radius:99px;background:var(--raised);color:var(--muted);white-space:nowrap}
+.seg.has .badge{background:var(--ok-soft);color:var(--ok)}
+.seg.live .badge{background:var(--rec-soft);color:var(--rec)}
+.prompt{font-size:var(--prompt);font-weight:500;line-height:1.9;margin:0}
+.timer{font-variant-numeric:tabular-nums;font-weight:600;color:var(--rec)}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--rec);display:inline-block;animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.25}}
+.edit{display:flex;flex-direction:column;gap:10px;border-top:1px dashed var(--line);padding-top:12px}
+canvas.wave{width:100%;height:64px;background:var(--raised);border-radius:8px;display:block}
+.ctl{display:grid;grid-template-columns:7.5em 1fr 4.2em;align-items:center;gap:8px;font-size:.88rem}
+.ctl output{font-variant-numeric:tabular-nums;text-align:left;color:var(--muted);direction:ltr}
+input[type=range]{width:100%;accent-color:var(--gold)}
+.edit input[type=range]{direction:ltr} /* match the waveform's left-to-right time axis */
+.meta{font-size:.82rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);padding:10px max(16px,env(safe-area-inset-right,0px)) calc(10px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));z-index:5}
+.bar .in{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:8px}
+details summary{cursor:pointer;font-weight:600;font-size:.9rem;color:var(--gold)}
+details .ctl{margin-top:6px}
+.status{font-size:.86rem;color:var(--muted);min-height:1.4em}
+.err{color:var(--rec);font-size:.86rem}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:.85rem;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){.dot{animation:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>استوديو التعليق الصوتي</h1>
+    <p class="sub">اكتب النص، سجّل كل مقطع وعيده لين تقتنع، عدّل القص والسرعة والفخامة، وحمّل ملف صوت واحد جاهز للمونتاج.</p>
+  </header>
+
+  <section class="panel" aria-labelledby="scriptTitle">
+    <h2 id="scriptTitle">النص</h2>
+    <textarea id="script" aria-describedby="scriptHint"></textarea>
+    <p class="hint" id="scriptHint">افصل بين المقاطع بسطر فاضي. كل فقرة تصير مقطع تسجيل. إذا تريد عنوان للمقطع، اكتبه بأول سطر وبعده نقطتين، مثل «الخاتمة:».</p>
+    <div class="row">
+      <button class="btn primary" id="apply" type="button">قسّم النص لمقاطع</button>
+      <span class="hint" id="applyMsg"></span>
+    </div>
+  </section>
+
+  <div class="toolbar">حجم النص
+    <button class="btn small" id="smaller" type="button" aria-label="تصغير النص">أ−</button>
+    <button class="btn small" id="bigger" type="button" aria-label="تكبير النص">أ+</button>
+  </div>
+
+  <div id="segs" class="wrap" style="gap:14px"></div>
+</div>
+
+<div class="bar"><div class="in">
+  <details>
+    <summary>نبرة الصوت والفواصل</summary>
+    <div class="ctl"><label for="fx-bass">التفخيم</label><input type="range" id="fx-bass" min="0" max="12" step="1" value="5"><output id="o-bass"></output></div>
+    <div class="ctl"><label for="fx-pitch">طبقة أعمق</label><input type="range" id="fx-pitch" min="-4" max="0" step="0.5" value="-1"><output id="o-pitch"></output></div>
+    <div class="ctl"><label for="fx-clar">الوضوح</label><input type="range" id="fx-clar" min="0" max="8" step="1" value="3"><output id="o-clar"></output></div>
+    <div class="ctl"><label for="fx-comp">ثبات الصوت</label><input type="range" id="fx-comp" min="0" max="10" step="1" value="6"><output id="o-comp"></output></div>
+    <div class="ctl"><label for="fx-gap">فاصل بين المقاطع</label><input type="range" id="fx-gap" min="0" max="2" step="0.1" value="0.8"><output id="o-gap"></output></div>
+  </details>
+  <div class="status" id="status" role="status"></div>
+  <div class="row">
+    <button class="btn" id="playAll" type="button">▶ اسمع الكل</button>
+    <button class="btn primary" id="export" type="button">⬇ حمّل الملف</button>
+    <button class="btn" id="exportEach" type="button">⬇ كل مقطع لوحده</button>
+  </div>
+</div></div>
+
+<script>
+"use strict";
+/* ---------- defaults ---------- */
+const DEFAULT_SCRIPT=`المقدمة:
+هاي خطة علاج حقيقية لأحد مراجعينا بالتقويم الشفاف.
+
+حركة الأسنان:
+قبل لا نبدي، نصمم الخطة كاملة على الكمبيوتر. نشوف كل سن وين هسه، ووين لازم يوصل، مرحلة بمرحلة.
+
+التخطيط:
+كل طقم يحرك الأسنان شوية، فالحركة هادئة ومدروسة، بدون أسلاك وبدون ألم التقويم الثابت.
+
+النتيجة:
+وهنا تشوف النتيجة النهائية من كل الزوايا، يعني المراجع يعرف شلون راح تصير ابتسامته من قبل لا يلبس أول طقم.
+
+الخاتمة:
+إذا تريد تعرف حالتك تنفع للتقويم الشفاف، دزلنا صورة أسنانك بالخاص، ونشوفها ونجاوبك.`;
+
+const $=id=>document.getElementById(id);
+const store={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v)}catch(e){return d}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+const fmt=s=>{s=Math.max(0,s);const m=Math.floor(s/60),r=(s-m*60);return m+":"+r.toFixed(1).padStart(4,"0")};
+let ctx=null;
+const AC=()=>ctx||(ctx=new (window.AudioContext||window.webkitAudioContext)());
+
+/* ---------- IndexedDB for takes ---------- */
+const idb=(()=>{let p;const open=()=>p||(p=new Promise((res,rej)=>{const r=indexedDB.open("voice-studio",1);r.onupgradeneeded=()=>r.result.createObjectStore("takes");r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)}));
+ const tx=async(mode,fn)=>{const db=await open();return new Promise((res,rej)=>{const t=db.transaction("takes",mode);const s=t.objectStore("takes");const r=fn(s);t.oncomplete=()=>res(r&&r.result);t.onerror=()=>rej(t.error)})};
+ return{put:(k,v)=>tx("readwrite",s=>s.put(v,k)).catch(()=>{}),get:k=>tx("readonly",s=>s.get(k)).catch(()=>null),del:k=>tx("readwrite",s=>s.delete(k)).catch(()=>{}),clear:()=>tx("readwrite",s=>s.clear()).catch(()=>{})}})();
+
+/* ---------- script parsing ---------- */
+function parse(text){
+  return text.split(/\n\s*\n/).map(b=>b.trim()).filter(Boolean).map((b,i)=>{
+    const lines=b.split("\n");let title="",body=b;
+    if(lines.length>1&&/[:：]\s*$/.test(lines[0])&&lines[0].length<40){title=lines[0].replace(/[:：]\s*$/,"");body=lines.slice(1).join("\n").trim()}
+    return{title:title||("المقطع "+(i+1)),text:body};
+  });
+}
+
+/* ---------- DSP ---------- */
+function toMono(buf){const n=buf.length,out=new Float32Array(n);for(let c=0;c<buf.numberOfChannels;c++){const d=buf.getChannelData(c);for(let i=0;i<n;i++)out[i]+=d[i]/buf.numberOfChannels}return out}
+// WSOLA time stretch: r = output length / input length
+function stretch(x,r,sr){
+  if(Math.abs(r-1)<0.005)return x;
+  const N=Math.round(sr*0.04)&~1, Hs=N>>1, Ha=Hs/r, tol=Math.round(N/4);
+  const win=new Float32Array(N);for(let i=0;i<N;i++)win[i]=0.5-0.5*Math.cos(2*Math.PI*i/N);
+  const outLen=Math.ceil(x.length*r);const y=new Float32Array(outLen+N);
+  let prev=0;
+  for(let k=0;;k++){
+    const op=k*Hs, nom=Math.round(k*Ha);
+    if(nom+N>=x.length||op+N>y.length)break;
+    let best=nom;
+    if(k>0){
+      const tgt=prev+Hs;let bestC=-Infinity;
+      const lo=Math.max(0,nom-tol),hi=Math.min(x.length-N-1,nom+tol);
+      for(let c=lo;c<=hi;c+=2){let s=0;for(let i=0;i<N;i+=4)s+=x[c+i]*x[tgt+i];if(s>bestC){bestC=s;best=c}}
+    }
+    for(let i=0;i<N;i++)y[op+i]+=x[best+i]*win[i];
+    prev=best;
+  }
+  return y.subarray(0,outLen);
+}
+function resample(x,ratio){ // ratio>1 = read faster (shorter, higher)
+  if(Math.abs(ratio-1)<1e-4)return x;
+  const n=Math.floor(x.length/ratio),y=new Float32Array(n);
+  for(let i=0;i<n;i++){const p=i*ratio,j=Math.floor(p),f=p-j;y[i]=x[j]*(1-f)+(x[j+1]||0)*f}
+  return y;
+}
+function silenceBounds(x,sr){
+  const w=Math.round(sr*0.02);let peak=0;for(let i=0;i<x.length;i++){const a=Math.abs(x[i]);if(a>peak)peak=a}
+  const th=Math.max(0.01,peak*0.06);const rms=i=>{let s=0;for(let j=i;j<i+w&&j<x.length;j++)s+=x[j]*x[j];return Math.sqrt(s/w)};
+  let a=0;while(a<x.length-w&&rms(a)<th)a+=w;let b=x.length-w;while(b>a&&rms(b)<th)b-=w;
+  const pad=Math.round(sr*0.15);return[Math.max(0,a-pad)/sr,Math.min(x.length,b+w+pad)/sr];
+}
+async function effects(x,sr,fx){
+  const len=x.length+Math.round(sr*0.05);
+  const oc=new OfflineAudioContext(1,len,sr);
+  const b=oc.createBuffer(1,x.length,sr);b.copyToChannel(x,0);
+  const src=oc.createBufferSource();src.buffer=b;
+  const hp=oc.createBiquadFilter();hp.type="highpass";hp.frequency.value=75;
+  const low=oc.createBiquadFilter();low.type="lowshelf";low.frequency.value=170;low.gain.value=fx.bass;
+  const mud=oc.createBiquadFilter();mud.type="peaking";mud.frequency.value=380;mud.Q.value=1;mud.gain.value=-fx.bass*0.25;
+  const pres=oc.createBiquadFilter();pres.type="peaking";pres.frequency.value=3200;pres.Q.value=0.9;pres.gain.value=fx.clar;
+  const air=oc.createBiquadFilter();air.type="highshelf";air.frequency.value=9000;air.gain.value=fx.clar*0.4;
+  const comp=oc.createDynamicsCompressor();comp.threshold.value=-12-fx.comp*2;comp.ratio.value=1+fx.comp*0.5;comp.attack.value=0.005;comp.release.value=0.18;comp.knee.value=8;
+  src.connect(hp).connect(low).connect(mud).connect(pres).connect(air).connect(comp).connect(oc.destination);
+  src.start();
+  const out=(await oc.startRendering()).getChannelData(0).slice(0,x.length);
+  let peak=0;for(let i=0;i<out.length;i++){const a=Math.abs(out[i]);if(a>peak)peak=a}
+  const g=peak>0?0.891/peak:1;for(let i=0;i<out.length;i++)out[i]*=g; // normalize to -1 dBFS
+  const f=Math.min(Math.round(sr*0.012),out.length>>1);for(let i=0;i<f;i++){const k=i/f;out[i]*=k;out[out.length-1-i]*=k}
+  return out;
+}
+async function processTake(t,fx,sr){
+  const s=Math.floor(t.trim[0]*sr),e=Math.max(s+1,Math.floor(t.trim[1]*sr));
+  let x=t.mono.subarray(s,e);
+  const p=Math.pow(2,-fx.pitch/12); // pitch<0 => p>1 => deeper
+  x=stretch(x,p/t.speed,sr);       // change length
+  x=resample(x,p);                 // restore length, lower pitch
+  return effects(x,sr,fx);
+}
+function wav(samples,sr){
+  const n=samples.length,buf=new ArrayBuffer(44+n*2),v=new DataView(buf);
+  const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
+  w(0,"RIFF");v.setUint32(4,36+n*2,true);w(8,"WAVE");w(12,"fmt ");v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,"data");v.setUint32(40,n*2,true);
+  for(let i=0;i<n;i++){const s=Math.max(-1,Math.min(1,samples[i]));v.setInt16(44+i*2,s<0?s*0x8000:s*0x7fff,true)}
+  return new Blob([buf],{type:"audio/wav"});
+}
+function download(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},4000)}
+
+/* ---------- state ---------- */
+let segments=[];        // {title,text}
+const takes=[];         // index -> {mono,sr,trim:[a,b],speed,blob,cache}
+const fx=Object.assign({bass:5,pitch:-1,clar:3,comp:6,gap:0.8},store.get("vs-fx",{}));
+let playing=null;
+function stop(){if(playing){try{playing.stop()}catch(e){}playing=null}}
+function play(samples,sr,onend){stop();const c=AC();c.resume();const b=c.createBuffer(1,samples.length,sr);b.copyToChannel(samples,0);const s=c.createBufferSource();s.buffer=b;s.connect(c.destination);s.onended=()=>{if(playing===s)playing=null;onend&&onend()};s.start();playing=s;return s}
+const say=t=>$("status").textContent=t;
+
+/* ---------- recording ---------- */
+let rec=null;
+async function startRec(i){
+  if(rec)return;
+  let stream;
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:true,autoGainControl:false,channelCount:1}})}
+  catch(e){say("ما گدرت أوصل للمايكروفون. اسمح للموقع باستخدام المايك من إعدادات المتصفح وجرّب مرة ثانية.");return}
+  const types=["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg"];
+  const mime=types.find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t))||"";
+  const mr=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);const chunks=[];
+  mr.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+  const t0=performance.now();
+  rec={i,mr,stream,tick:setInterval(()=>{const el=document.querySelector(`#seg-${i} .timer`);if(el)el.textContent=fmt((performance.now()-t0)/1000)},100)};
+  mr.onstop=async()=>{
+    clearInterval(rec.tick);stream.getTracks().forEach(t=>t.stop());rec=null;
+    const blob=new Blob(chunks,{type:mr.mimeType||mime});
+    await loadTake(i,blob,true);render();
+  };
+  mr.start(250);stop();render();
+}
+function stopRec(){if(rec)rec.mr.stop()}
+async function loadTake(i,blob,fresh){
+  try{
+    const c=AC();const ab=await blob.arrayBuffer();
+    const buf=await new Promise((res,rej)=>c.decodeAudioData(ab,res,rej));
+    const mono=toMono(buf);const sr=buf.sampleRate;
+    const saved=fresh?null:store.get("vs-edit-"+i,null);
+    const trim=saved?saved.trim:silenceBounds(mono,sr);
+    takes[i]={mono,sr,blob,trim:[Math.min(trim[0],mono.length/sr),Math.min(trim[1],mono.length/sr)],speed:saved?saved.speed:1,cache:null};
+    if(fresh){idb.put("take-"+i,blob);saveEdit(i)}
+  }catch(e){say("ما گدرت أقرا التسجيل. سجّل مرة ثانية.")}
+}
+const saveEdit=i=>{const t=takes[i];if(t)store.set("vs-edit-"+i,{trim:t.trim,speed:t.speed})};
+async function processed(i){const t=takes[i];if(!t.cache)t.cache=await processTake(t,fx,t.sr);return t.cache}
+
+/* ---------- UI ---------- */
+function render(){
+  const box=$("segs");box.textContent="";
+  segments.forEach((s,i)=>{
+    const t=takes[i],live=rec&&rec.i===i;
+    const el=document.createElement("section");el.className="seg"+(t?" has":"")+(live?" live":"");el.id="seg-"+i;
+    el.innerHTML=`<div class="seg-head"><span class="num"></span><span class="badge"></span></div>
+      <p class="prompt"></p>
+      <div class="row ctlrow"></div>`;
+    el.querySelector(".num").textContent=(i+1)+". "+s.title;
+    el.querySelector(".badge").textContent=live?"ديسجل…":t?"تسجل ✓":"ما تسجل";
+    el.querySelector(".prompt").textContent=s.text;
+    const row=el.querySelector(".ctlrow");
+    if(live){
+      row.innerHTML=`<button class="btn rec" type="button">■ وقّف</button><span class="dot" aria-hidden="true"></span><span class="timer">0:00.0</span>`;
+      row.querySelector("button").onclick=stopRec;
+    }else{
+      const r=document.createElement("button");r.type="button";r.className="btn rec";r.textContent=t?"↻ عيد التسجيل":"🎙 سجّل";r.disabled=!!rec;r.onclick=()=>startRec(i);row.appendChild(r);
+      if(t){
+        const p=document.createElement("button");p.type="button";p.className="btn";p.textContent="▶ اسمع";
+        p.onclick=async()=>{if(playing){stop();p.textContent="▶ اسمع";return}p.textContent="…";const y=await processed(i);p.textContent="⏸ وقف";play(y,t.sr,()=>p.textContent="▶ اسمع")};
+        row.appendChild(p);
+        const o=document.createElement("button");o.type="button";o.className="btn small";o.textContent="الأصلي";o.title="اسمع التسجيل الخام بدون تعديل";
+        o.onclick=()=>play(t.mono,t.sr);row.appendChild(o);
+        const d=document.createElement("button");d.type="button";d.className="btn small";d.textContent="حذف";
+        d.onclick=()=>{if(d.dataset.sure){takes[i]=null;idb.del("take-"+i);store.set("vs-edit-"+i,null);stop();render()}else{d.dataset.sure=1;d.textContent="متأكد؟"}};row.appendChild(d);
+        el.appendChild(editor(i));
+      }
+    }
+    box.appendChild(el);
+  });
+  const n=takes.filter(Boolean).length;
+  $("export").disabled=$("playAll").disabled=$("exportEach").disabled=n===0||!!rec;
+  if(!rec)say(segments.length?`سجلت ${n} من ${segments.length} مقاطع`+(n<segments.length?"، والمقاطع الناقصة تنترك عند الحفظ.":"."):"");
+}
+function editor(i){
+  const t=takes[i],dur=t.mono.length/t.sr;
+  const wrap=document.createElement("div");wrap.className="edit";
+  wrap.innerHTML=`<canvas class="wave" aria-hidden="true"></canvas>
+   <div class="ctl"><label>بداية القص</label><input type="range" class="ts" min="0" step="0.01"><output></output></div>
+   <div class="ctl"><label>نهاية القص</label><input type="range" class="te" min="0" step="0.01"><output></output></div>
+   <div class="ctl"><label>السرعة</label><input type="range" class="sp" min="0.7" max="1.4" step="0.05"><output></output></div>
+   <div class="row"><button type="button" class="btn small auto">قص السكوت تلقائياً</button><button type="button" class="btn small reset">رجّع الأصلي</button><span class="meta"></span></div>`;
+  const [ts,te,sp]=["ts","te","sp"].map(c=>wrap.querySelector("."+c));
+  ts.id="ts-"+i;te.id="te-"+i;sp.id="sp-"+i;
+  wrap.querySelectorAll("label").forEach((l,k)=>l.htmlFor=[ts,te,sp][k].id);
+  ts.max=te.max=dur.toFixed(2);ts.value=t.trim[0];te.value=t.trim[1];sp.value=t.speed;
+  const cv=wrap.querySelector("canvas"),meta=wrap.querySelector(".meta");
+  const sync=()=>{
+    ts.nextElementSibling.value=fmt(+ts.value);te.nextElementSibling.value=fmt(+te.value);sp.nextElementSibling.value="×"+(+sp.value).toFixed(2);
+    meta.textContent="الطول بعد التعديل: "+fmt((t.trim[1]-t.trim[0])/t.speed);draw(cv,t);
+  };
+  const changed=()=>{let a=+ts.value,b=+te.value;if(b-a<0.2){if(document.activeElement===ts)a=b-0.2;else b=a+0.2}t.trim=[Math.max(0,a),Math.min(dur,b)];ts.value=t.trim[0];te.value=t.trim[1];t.speed=+sp.value;t.cache=null;saveEdit(i);sync()};
+  [ts,te,sp].forEach(x=>x.addEventListener("input",changed));
+  wrap.querySelector(".auto").onclick=()=>{const b=silenceBounds(t.mono,t.sr);ts.value=b[0];te.value=b[1];changed()};
+  wrap.querySelector(".reset").onclick=()=>{ts.value=0;te.value=dur;sp.value=1;changed()};
+  requestAnimationFrame(sync);
+  return wrap;
+}
+function draw(cv,t){
+  const dpr=window.devicePixelRatio||1,W=cv.clientWidth||300,H=cv.clientHeight||64;cv.width=W*dpr;cv.height=H*dpr;
+  const g=cv.getContext("2d");g.scale(dpr,dpr);const cs=getComputedStyle(document.documentElement);
+  const dur=t.mono.length/t.sr,step=Math.max(1,Math.floor(t.mono.length/W));
+  for(let x=0;x<W;x++){
+    // RTL page, but time runs left→right like every audio editor
+    let m=0;const o=x*step;for(let j=0;j<step;j+=8){const a=Math.abs(t.mono[o+j]||0);if(a>m)m=a}
+    const sec=x/W*dur,on=sec>=t.trim[0]&&sec<=t.trim[1];
+    g.fillStyle=cs.getPropertyValue(on?"--wave-on":"--wave");const h=Math.max(1,m*H*0.95);g.fillRect(x,(H-h)/2,1,h);
+  }
+}
+
+/* ---------- global controls ---------- */
+function bindFx(){
+  const map={bass:["fx-bass","o-bass",v=>"+"+v+" dB"],pitch:["fx-pitch","o-pitch",v=>v+" نغمة"],clar:["fx-clar","o-clar",v=>"+"+v+" dB"],comp:["fx-comp","o-comp",v=>v+"/10"],gap:["fx-gap","o-gap",v=>(+v).toFixed(1)+" ث"]};
+  for(const k in map){const [id,oid,f]=map[k];const el=$(id);el.value=fx[k];$(oid).value=f(fx[k]);
+    el.addEventListener("input",()=>{fx[k]=+el.value;$(oid).value=f(el.value);store.set("vs-fx",fx);if(k!=="gap")takes.forEach(t=>t&&(t.cache=null))})}
+}
+async function buildAll(){
+  const parts=[];let sr=0;
+  for(let i=0;i<segments.length;i++){if(!takes[i])continue;say(`ديجهز المقطع ${i+1}…`);await new Promise(r=>setTimeout(r));parts.push(await processed(i));sr=takes[i].sr}
+  const gap=Math.round(fx.gap*sr),lead=Math.round(0.3*sr);
+  const total=lead*2+parts.reduce((a,p)=>a+p.length,0)+gap*Math.max(0,parts.length-1);
+  const out=new Float32Array(total);let o=lead;parts.forEach((p,k)=>{out.set(p,o);o+=p.length+(k<parts.length-1?gap:0)});
+  return{out,sr};
+}
+$("playAll").onclick=async()=>{if(playing){stop();$("playAll").textContent="▶ اسمع الكل";return}const{out,sr}=await buildAll();say("ديشتغل ("+fmt(out.length/sr)+")");$("playAll").textContent="⏸ وقف";play(out,sr,()=>{$("playAll").textContent="▶ اسمع الكل";render()})};
+$("export").onclick=async()=>{const b=$("export");b.disabled=true;try{const{out,sr}=await buildAll();download(wav(out,sr),"voiceover.wav");say("انحفظ voiceover.wav ("+fmt(out.length/sr)+"). دزّه بالشات ويا مقاطع الفيديو.")}finally{b.disabled=false}};
+$("exportEach").onclick=async()=>{for(let i=0;i<segments.length;i++){if(!takes[i])continue;say(`ديحفظ المقطع ${i+1}…`);const y=await processed(i);download(wav(y,takes[i].sr),`voice_${String(i+1).padStart(2,"0")}.wav`);await new Promise(r=>setTimeout(r,700))}say("انحفظت المقاطع كل واحد بملف.")};
+
+let size=store.get("vs-size",1.4);
+const setSize=v=>{size=Math.max(1,Math.min(2.4,v));document.documentElement.style.setProperty("--prompt",size+"rem");store.set("vs-size",size)};
+$("bigger").onclick=()=>setSize(size+0.15);$("smaller").onclick=()=>setSize(size-0.15);setSize(size);
+
+$("apply").onclick=async()=>{
+  const txt=$("script").value;const next=parse(txt);
+  if(!next.length){$("applyMsg").textContent="اكتب النص أول.";return}
+  const changedCount=next.length!==segments.length;
+  segments=next;store.set("vs-script",txt);
+  if(changedCount){takes.length=0;await idb.clear();for(let i=0;i<40;i++)store.set("vs-edit-"+i,null);$("applyMsg").textContent=`صار ${next.length} مقاطع. التسجيلات القديمة انمسحت لأن عدد المقاطع تغيّر.`}
+  else $("applyMsg").textContent=`تحدّث النص. التسجيلات بقت بمكانها.`;
+  stop();render();
+};
+window.addEventListener("resize",()=>document.querySelectorAll(".seg canvas.wave").forEach((cv)=>{const i=+cv.closest(".seg").id.slice(4);takes[i]&&draw(cv,takes[i])}));
+
+(async function init(){
+  const txt=store.get("vs-script",DEFAULT_SCRIPT);$("script").value=txt;segments=parse(txt);bindFx();
+  for(let i=0;i<segments.length;i++){const b=await idb.get("take-"+i);if(b)await loadTake(i,b,false)}
+  if(!navigator.mediaDevices||!window.MediaRecorder)say("هذا المتصفح ما يدعم التسجيل. افتح الرابط بـ Chrome أو Safari.");
+  render();
+})();
+</script>
+</body>
+</html>
