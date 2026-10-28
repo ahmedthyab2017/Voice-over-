@@ -63,6 +63,7 @@ input[type=range]{width:100%;accent-color:var(--gold)}
 .bar .in{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:8px}
 details summary{cursor:pointer;font-weight:600;font-size:.9rem;color:var(--gold)}
 details .ctl{margin-top:6px}
+details[open]{max-height:46vh;overflow:auto;padding-bottom:4px}
 .status{font-size:.86rem;color:var(--muted);min-height:1.4em}
 .err{color:var(--rec);font-size:.86rem}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:.85rem;color:var(--muted)}
@@ -97,10 +98,14 @@ details .ctl{margin-top:6px}
 <div class="bar"><div class="in">
   <details>
     <summary>نبرة الصوت والفواصل</summary>
-    <div class="ctl"><label for="fx-bass">التفخيم</label><input type="range" id="fx-bass" min="0" max="12" step="1" value="5"><output id="o-bass"></output></div>
-    <div class="ctl"><label for="fx-pitch">طبقة أعمق</label><input type="range" id="fx-pitch" min="-4" max="0" step="0.5" value="-1"><output id="o-pitch"></output></div>
+    <div class="ctl"><label for="fx-bass">التفخيم</label><input type="range" id="fx-bass" min="0" max="12" step="1" value="4"><output id="o-bass"></output></div>
+    <div class="ctl"><label for="fx-pitch">طبقة أعمق</label><input type="range" id="fx-pitch" min="-4" max="0" step="0.5" value="0"><output id="o-pitch"></output></div>
     <div class="ctl"><label for="fx-clar">الوضوح</label><input type="range" id="fx-clar" min="0" max="8" step="1" value="3"><output id="o-clar"></output></div>
     <div class="ctl"><label for="fx-comp">ثبات الصوت</label><input type="range" id="fx-comp" min="0" max="10" step="1" value="6"><output id="o-comp"></output></div>
+    <div class="ctl"><label for="fx-warm">الدفء</label><input type="range" id="fx-warm" min="0" max="10" step="1" value="3"><output id="o-warm"></output></div>
+    <div class="ctl"><label for="fx-space">المساحة</label><input type="range" id="fx-space" min="0" max="10" step="1" value="2"><output id="o-space"></output></div>
+    <div class="ctl"><label for="fx-dn">تنظيف الضجيج</label><input type="range" id="fx-dn" min="0" max="10" step="1" value="4"><output id="o-dn"></output></div>
+    <div class="ctl"><label for="fx-ds">تخفيف السين</label><input type="range" id="fx-ds" min="0" max="10" step="1" value="4"><output id="o-ds"></output></div>
     <div class="ctl"><label for="fx-gap">فاصل بين المقاطع</label><input type="range" id="fx-gap" min="0" max="2" step="0.1" value="0.8"><output id="o-gap"></output></div>
   </details>
   <div class="status" id="status" role="status"></div>
@@ -184,23 +189,98 @@ function silenceBounds(x,sr){
   let a=0;while(a<x.length-w&&rms(a)<th)a+=w;let b=x.length-w;while(b>a&&rms(b)<th)b-=w;
   const pad=Math.round(sr*0.15);return[Math.max(0,a-pad)/sr,Math.min(x.length,b+w+pad)/sr];
 }
+/* --- broadcast voice chain: HP -> expander -> de-esser -> warmth -> EQ -> compression (+parallel) -> room -> loudness -> limiter --- */
+function biquad(x,type,f,sr,Q){
+  const w=2*Math.PI*f/sr,cw=Math.cos(w),al=Math.sin(w)/(2*Q);let b0,b1,b2;const a0=1+al,a1=-2*cw,a2=1-al;
+  if(type==="hp"){b0=(1+cw)/2;b1=-(1+cw);b2=b0}else if(type==="lp"){b0=(1-cw)/2;b1=1-cw;b2=b0}else{b0=al;b1=0;b2=-al}
+  const y=new Float32Array(x.length);let x1=0,x2=0,y1=0,y2=0;
+  for(let i=0;i<x.length;i++){const v=(b0*x[i]+b1*x1+b2*x2-a1*y1-a2*y2)/a0;y[i]=v;x2=x1;x1=x[i];y2=y1;y1=v}
+  return y;
+}
+function gate(x,sr,amt){ // gentle downward expander, floor learned from the take itself
+  const blk=Math.round(sr*0.01),nb=Math.floor(x.length/blk);if(nb<8)return x;
+  const r=new Float32Array(nb);for(let b=0;b<nb;b++){let s=0;for(let i=b*blk;i<(b+1)*blk;i++)s+=x[i]*x[i];r[b]=Math.sqrt(s/blk)}
+  const sorted=Array.from(r).sort((p,q)=>p-q),floor=Math.max(sorted[Math.floor(nb*0.15)],1e-5),thr=floor*3;
+  const lowGain=Math.pow(10,-amt*3.5/20),atk=Math.exp(-1/(sr*0.003)),rel=Math.exp(-1/(sr*0.14));
+  const y=new Float32Array(x.length);let g=1;
+  for(let i=0;i<x.length;i++){
+    const b=Math.min(nb-1,Math.floor(i/blk)+1); // look one block ahead so word onsets are never clipped
+    const q=r[b]/thr,t=q>=1?1:Math.max(lowGain,q*q);
+    g=t>g?t+(g-t)*atk:t+(g-t)*rel;y[i]=x[i]*g;
+  }
+  return y;
+}
+function deess(x,sr,amt){
+  const sib=biquad(x,"bp",7000,sr,1.1);let e=0;for(let i=0;i<sib.length;i++)e+=sib[i]*sib[i];
+  const rms=Math.sqrt(e/sib.length)||1e-6,thr=rms*2.2,k=amt/10*0.85;
+  const y=new Float32Array(x.length),atk=Math.exp(-1/(sr*0.001)),rel=Math.exp(-1/(sr*0.025));let env=0,g=1;
+  for(let i=0;i<x.length;i++){
+    const a=Math.abs(sib[i]);env=a>env?a+(env-a)*atk:a+(env-a)*rel;
+    const t=env>thr?Math.pow(thr/env,k):1;g=t<g?t+(g-t)*atk:t+(g-t)*rel;
+    y[i]=x[i]-sib[i]*(1-g);
+  }
+  return y;
+}
+function warmth(x,amt){ // asymmetric soft saturation blended in parallel = even + odd harmonics, a "tube" colour
+  const d=1+amt*0.6,w=amt/10*0.5,bias=0.1,off=Math.tanh(bias),norm=d*(1-off*off),y=new Float32Array(x.length);
+  for(let i=0;i<x.length;i++){const sat=(Math.tanh(d*x[i]+bias)-off)/norm;y[i]=x[i]*(1-w)+sat*w}
+  return y;
+}
+function roomIR(sr,sec){
+  const n=Math.round(sr*sec),pre=Math.round(sr*0.008),ir=new Float32Array(n);let lp=0;
+  for(let i=pre;i<n;i++){const t=(i-pre)/sr,damp=Math.min(0.92,0.35+t*1.8);lp=lp*damp+(Math.random()*2-1)*(1-damp);ir[i]=lp*Math.exp(-t/0.11)}
+  return ir;
+}
+function rmsDb(x){ // gated loudness: ignore pauses so quiet takes are not over-boosted
+  const blk=Math.round(0.05*48000),pw=[];let mx=0;
+  for(let i=0;i+blk<=x.length;i+=blk){let s=0;for(let j=i;j<i+blk;j++)s+=x[j]*x[j];s/=blk;pw.push(s);if(s>mx)mx=s}
+  const use=pw.filter(p=>p>mx*0.05);if(!use.length)return -60;
+  return 10*Math.log10(use.reduce((a,b)=>a+b,0)/use.length+1e-12);
+}
+function limiter(x,sr,ceil){
+  const L=Math.round(sr*0.004),n=x.length,need=new Float32Array(n);
+  for(let i=0;i<n;i++){const a=Math.abs(x[i]);need[i]=a>ceil?ceil/a:1}
+  const mn=new Float32Array(n),dq=[];let head=0;
+  for(let i=0;i<n+L;i++){ // sliding minimum over a 2L window
+    if(i<n){while(dq.length>head&&need[dq[dq.length-1]]>=need[i])dq.pop();dq.push(i)}
+    while(dq[head]<i-2*L)head++;
+    const c=i-L;if(c>=0&&c<n)mn[c]=need[dq[head]];
+  }
+  const y=new Float32Array(n);
+  // box-smooth the gain curve (cumulative-sum filter): never exceeds the required reduction
+  const cs=new Float64Array(n+1);for(let i=0;i<n;i++)cs[i+1]=cs[i]+mn[i];
+  for(let i=0;i<n;i++){const lo=Math.max(0,i-L),hi=Math.min(n,i+L+1);y[i]=x[i]*((cs[hi]-cs[lo])/(hi-lo))}
+  return y;
+}
 async function effects(x,sr,fx){
-  const len=x.length+Math.round(sr*0.05);
+  let y=biquad(biquad(x,"hp",80,sr,0.707),"hp",80,sr,0.707);
+  if(fx.dn>0)y=gate(y,sr,fx.dn);
+  if(fx.ds>0)y=deess(y,sr,fx.ds);
+  if(fx.warm>0)y=warmth(y,fx.warm);
+  const tail=Math.round(sr*(fx.space>0?0.45:0.05)),len=y.length+tail;
   const oc=new OfflineAudioContext(1,len,sr);
-  const b=oc.createBuffer(1,x.length,sr);b.copyToChannel(x,0);
+  const b=oc.createBuffer(1,y.length,sr);b.copyToChannel(y,0);
   const src=oc.createBufferSource();src.buffer=b;
-  const hp=oc.createBiquadFilter();hp.type="highpass";hp.frequency.value=75;
-  const low=oc.createBiquadFilter();low.type="lowshelf";low.frequency.value=170;low.gain.value=fx.bass;
-  const mud=oc.createBiquadFilter();mud.type="peaking";mud.frequency.value=380;mud.Q.value=1;mud.gain.value=-fx.bass*0.25;
-  const pres=oc.createBiquadFilter();pres.type="peaking";pres.frequency.value=3200;pres.Q.value=0.9;pres.gain.value=fx.clar;
-  const air=oc.createBiquadFilter();air.type="highshelf";air.frequency.value=9000;air.gain.value=fx.clar*0.4;
-  const comp=oc.createDynamicsCompressor();comp.threshold.value=-12-fx.comp*2;comp.ratio.value=1+fx.comp*0.5;comp.attack.value=0.005;comp.release.value=0.18;comp.knee.value=8;
-  src.connect(hp).connect(low).connect(mud).connect(pres).connect(air).connect(comp).connect(oc.destination);
+  const bf=(type,f,gain,Q)=>{const n=oc.createBiquadFilter();n.type=type;n.frequency.value=f;if(gain!=null)n.gain.value=gain;if(Q)n.Q.value=Q;return n};
+  const low=bf("lowshelf",160,fx.bass),mud=bf("peaking",320,-1.5-fx.bass*0.2,1),box=bf("peaking",550,-1,1.2);
+  const pres=bf("peaking",3400,fx.clar,0.9),air=bf("highshelf",11000,fx.clar*0.7);
+  const eq=oc.createGain();src.connect(low).connect(mud).connect(box).connect(pres).connect(air).connect(eq);
+  const mk=(th,ra,at,rl,kn)=>{const c=oc.createDynamicsCompressor();c.threshold.value=th;c.ratio.value=ra;c.attack.value=at;c.release.value=rl;c.knee.value=kn;return c};
+  const c1=mk(-16-fx.comp*1.2,1.5+fx.comp*0.3,0.006,0.16,10);
+  const c2=mk(-30,10,0.002,0.09,6),par=oc.createGain();par.gain.value=fx.comp/10*0.35;
+  const mix=oc.createGain();
+  eq.connect(c1).connect(mix);eq.connect(c2).connect(par).connect(mix);
+  mix.connect(oc.destination);
+  if(fx.space>0){
+    const cv=oc.createConvolver(),ib=oc.createBuffer(1,Math.round(sr*0.45),sr);ib.copyToChannel(roomIR(sr,0.45),0);cv.buffer=ib;
+    const wet=oc.createGain();wet.gain.value=fx.space*0.028;mix.connect(cv).connect(wet).connect(oc.destination);
+  }
   src.start();
-  const out=(await oc.startRendering()).getChannelData(0).slice(0,x.length);
-  let peak=0;for(let i=0;i<out.length;i++){const a=Math.abs(out[i]);if(a>peak)peak=a}
-  const g=peak>0?0.891/peak:1;for(let i=0;i<out.length;i++)out[i]*=g; // normalize to -1 dBFS
-  const f=Math.min(Math.round(sr*0.012),out.length>>1);for(let i=0;i<f;i++){const k=i/f;out[i]*=k;out[out.length-1-i]*=k}
+  let out=(await oc.startRendering()).getChannelData(0).slice();
+  const g=Math.pow(10,(-18-rmsDb(out))/20);for(let i=0;i<out.length;i++)out[i]*=g; // ~ -18 dBFS RMS, broadcast speech level
+  out=limiter(out,sr,0.891); // true-peak-safe ceiling at -1 dBFS
+  const f=Math.min(Math.round(sr*0.012),out.length>>1),f2=Math.min(Math.round(sr*0.06),out.length>>1);
+  for(let i=0;i<f;i++)out[i]*=i/f;for(let i=0;i<f2;i++)out[out.length-1-i]*=i/f2;
   return out;
 }
 async function processTake(t,fx,sr){
@@ -216,7 +296,7 @@ function wav(samples,sr){
   const w=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
   w(0,"RIFF");v.setUint32(4,36+n*2,true);w(8,"WAVE");w(12,"fmt ");v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
   v.setUint32(24,sr,true);v.setUint32(28,sr*2,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,"data");v.setUint32(40,n*2,true);
-  for(let i=0;i<n;i++){const s=Math.max(-1,Math.min(1,samples[i]));v.setInt16(44+i*2,s<0?s*0x8000:s*0x7fff,true)}
+  for(let i=0;i<n;i++){const d=(Math.random()-Math.random())/32768;const s=Math.max(-1,Math.min(1,samples[i]+d));v.setInt16(44+i*2,s<0?Math.round(s*0x8000):Math.round(s*0x7fff),true)}
   return new Blob([buf],{type:"audio/wav"});
 }
 function download(blob,name){const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},4000)}
@@ -224,31 +304,60 @@ function download(blob,name){const a=document.createElement("a");a.href=URL.crea
 /* ---------- state ---------- */
 let segments=[];        // {title,text}
 const takes=[];         // index -> {mono,sr,trim:[a,b],speed,blob,cache}
-const fx=Object.assign({bass:5,pitch:-1,clar:3,comp:6,gap:0.8},store.get("vs-fx",{}));
+const FXKEY="vs-fx2";
+const fx=Object.assign({bass:4,pitch:0,clar:3,comp:6,warm:3,space:2,dn:4,ds:4,gap:0.8},store.get(FXKEY,{}));
 let playing=null;
 function stop(){if(playing){try{playing.stop()}catch(e){}playing=null}}
 function play(samples,sr,onend){stop();const c=AC();c.resume();const b=c.createBuffer(1,samples.length,sr);b.copyToChannel(samples,0);const s=c.createBufferSource();s.buffer=b;s.connect(c.destination);s.onended=()=>{if(playing===s)playing=null;onend&&onend()};s.start();playing=s;return s}
 const say=t=>$("status").textContent=t;
 
 /* ---------- recording ---------- */
-let rec=null;
+let rec=null,workletReady=null;
+function wavF32(chunks,sr){
+  let n=0;chunks.forEach(c=>n+=c.length);const buf=new ArrayBuffer(44+n*4),v=new DataView(buf);
+  const w=(o,t)=>{for(let i=0;i<t.length;i++)v.setUint8(o+i,t.charCodeAt(i))};
+  w(0,"RIFF");v.setUint32(4,36+n*4,true);w(8,"WAVEfmt ");v.setUint32(16,16,true);v.setUint16(20,3,true);v.setUint16(22,1,true);
+  v.setUint32(24,sr,true);v.setUint32(28,sr*4,true);v.setUint16(32,4,true);v.setUint16(34,32,true);w(36,"data");v.setUint32(40,n*4,true);
+  new Float32Array(buf,44).set(chunks.length===1?chunks[0]:(()=>{const a=new Float32Array(n);let o=0;chunks.forEach(c=>{a.set(c,o);o+=c.length});return a})());
+  return new Blob([buf],{type:"audio/wav"});
+}
+async function pcmRecorder(stream){ // raw float PCM: no codec, no artifacts
+  const c=AC();await c.resume();if(!c.audioWorklet)return null;
+  if(!workletReady){
+    const code='class R extends AudioWorkletProcessor{process(i){const ch=i[0]&&i[0][0];if(ch)this.port.postMessage(ch.slice(0));return true}}registerProcessor("pcm-rec",R)';
+    workletReady=c.audioWorklet.addModule(URL.createObjectURL(new Blob([code],{type:"text/javascript"})));
+  }
+  await workletReady;
+  const src=c.createMediaStreamSource(stream),node=new AudioWorkletNode(c,"pcm-rec",{numberOfInputs:1,numberOfOutputs:1,channelCount:1});
+  const mute=c.createGain();mute.gain.value=0;const chunks=[];node.port.onmessage=e=>chunks.push(e.data);
+  src.connect(node);node.connect(mute).connect(c.destination);
+  return{mimeType:"audio/wav",onstop:null,stop(){
+    src.disconnect();node.disconnect();mute.disconnect();node.port.onmessage=null;
+    this.blob=wavF32(chunks,c.sampleRate);this.onstop&&this.onstop();
+  }};
+}
 async function startRec(i){
   if(rec)return;
   let stream;
-  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:true,autoGainControl:false,channelCount:1}})}
+  // browser noise-suppression / echo-cancel / AGC all smear voices: record clean, process in the chain instead
+  try{stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:1,sampleRate:{ideal:48000}}})}
   catch(e){say("ما گدرت أوصل للمايكروفون. اسمح للموقع باستخدام المايك من إعدادات المتصفح وجرّب مرة ثانية.");return}
-  const types=["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg"];
-  const mime=types.find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t))||"";
-  const mr=new MediaRecorder(stream,mime?{mimeType:mime}:undefined);const chunks=[];
-  mr.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+  let mr=null,chunks=[],mime="";
+  try{mr=await pcmRecorder(stream)}catch(e){mr=null}
+  if(!mr){ // fallback: MediaRecorder at a high bitrate
+    const types=["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg"];
+    mime=types.find(t=>window.MediaRecorder&&MediaRecorder.isTypeSupported(t))||"";
+    mr=new MediaRecorder(stream,mime?{mimeType:mime,audioBitsPerSecond:256000}:{audioBitsPerSecond:256000});
+    mr.ondataavailable=e=>e.data.size&&chunks.push(e.data);mr.start(250);
+  }else{mime=mr.mimeType}
   const t0=performance.now();
   rec={i,mr,stream,tick:setInterval(()=>{const el=document.querySelector(`#seg-${i} .timer`);if(el)el.textContent=fmt((performance.now()-t0)/1000)},100)};
   mr.onstop=async()=>{
     clearInterval(rec.tick);stream.getTracks().forEach(t=>t.stop());rec=null;
-    const blob=new Blob(chunks,{type:mr.mimeType||mime});
+    const blob=mr.blob||new Blob(chunks,{type:mr.mimeType||mime});
     await loadTake(i,blob,true);render();
   };
-  mr.start(250);stop();render();
+  stop();render();
 }
 function stopRec(){if(rec)rec.mr.stop()}
 async function loadTake(i,blob,fresh){
@@ -338,9 +447,10 @@ function draw(cv,t){
 
 /* ---------- global controls ---------- */
 function bindFx(){
-  const map={bass:["fx-bass","o-bass",v=>"+"+v+" dB"],pitch:["fx-pitch","o-pitch",v=>v+" نغمة"],clar:["fx-clar","o-clar",v=>"+"+v+" dB"],comp:["fx-comp","o-comp",v=>v+"/10"],gap:["fx-gap","o-gap",v=>(+v).toFixed(1)+" ث"]};
+  const n10=v=>v+"/10";
+  const map={bass:["fx-bass","o-bass",v=>"+"+v+" dB"],pitch:["fx-pitch","o-pitch",v=>v+" نغمة"],clar:["fx-clar","o-clar",v=>"+"+v+" dB"],comp:["fx-comp","o-comp",n10],warm:["fx-warm","o-warm",n10],space:["fx-space","o-space",n10],dn:["fx-dn","o-dn",n10],ds:["fx-ds","o-ds",n10],gap:["fx-gap","o-gap",v=>(+v).toFixed(1)+" ث"]};
   for(const k in map){const [id,oid,f]=map[k];const el=$(id);el.value=fx[k];$(oid).value=f(fx[k]);
-    el.addEventListener("input",()=>{fx[k]=+el.value;$(oid).value=f(el.value);store.set("vs-fx",fx);if(k!=="gap")takes.forEach(t=>t&&(t.cache=null))})}
+    el.addEventListener("input",()=>{fx[k]=+el.value;$(oid).value=f(el.value);store.set(FXKEY,fx);if(k!=="gap")takes.forEach(t=>t&&(t.cache=null))})}
 }
 async function buildAll(){
   const parts=[];let sr=0;
